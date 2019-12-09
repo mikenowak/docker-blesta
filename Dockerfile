@@ -1,11 +1,40 @@
-FROM php:7.0-apache
+FROM php:7.2-apache
+
+ENV BLESTA_VERSION=4.7.2
+ENV BUILD_DEPS \
+        cron \
+        g++ \
+        gettext \
+        libicu-dev \
+        openssl \
+        libc-client-dev \
+        libkrb5-dev \
+        libxml2-dev \
+        libfreetype6-dev \
+        libgd-dev \
+        libmcrypt-dev \
+        bzip2 \
+        libbz2-dev \
+        libtidy-dev \
+        libcurl4-openssl-dev \
+        libz-dev \
+        libmemcached-dev \
+        libxslt-dev \
+        libgmp-dev \
+        libldap2-dev \
+        python3 \
+        python3-pycurl \
+        unzip \
+        wget \
+        supervisor
 
 RUN apt-get update \
-    && apt-get install --yes --force-yes cron g++ gettext libicu-dev openssl libc-client-dev libkrb5-dev libxml2-dev libfreetype6-dev libgd-dev libmcrypt-dev bzip2 libbz2-dev libtidy-dev libcurl4-openssl-dev libz-dev libmemcached-dev libxslt-dev libgmp-dev libldap2-dev python3 python3-pycurl unzip wget supervisor \
+    && apt-get install --yes --no-install-recommends $BUILD_DEPS \
     && docker-php-ext-configure ldap --with-libdir=lib/x86_64-linux-gnu/ \
     && docker-php-ext-configure imap --with-kerberos --with-imap-ssl \
-    && docker-php-ext-install pdo pdo_mysql curl gmp imap json ldap mbstring mcrypt simplexml gd \
-    && yes '' | pecl install -f mailparse \
+    && docker-php-ext-install pdo pdo_mysql curl gmp imap json ldap mbstring simplexml gd \
+    && yes '' | pecl install -f mailparse mcrypt-1.0.1 \
+    && docker-php-ext-enable mcrypt \
     && a2enmod rewrite \
     && a2enmod headers \
     && a2enmod remoteip  \
@@ -17,22 +46,33 @@ RUN apt-get update \
     && echo "expose_php=Off" >> /usr/local/etc/php/php.ini \
     && echo "ServerTokens Prod" >> /etc/apache2/conf-enabled/security.conf \
     && echo "ServerSignature Off" >> /etc/apache2/conf-enabled/security.conf \
-    && echo "<IfModule remoteip_module>" > /etc/apache2/conf-enabled/remoteip.conf \
-    && echo "    RemoteIPHeader X-Forwarded-For" >> /etc/apache2/conf-enabled/remoteip.conf \
-    && echo "    RemoteIPTrustedProxy 172.0.0.0/8" >> /etc/apache2/conf-enabled/remoteip.conf \
-    && echo "</IfModule>" >> /etc/apache2/conf-enabled/remoteip.conf
-
-RUN cd /tmp \
-    && curl -o ioncube.tar.gz http://downloads3.ioncube.com/loader_downloads/ioncube_loaders_lin_x86-64.tar.gz \
-    && tar -zxf ioncube.tar.gz \
-    && mv ioncube/ioncube_loader_lin_7.0.so /usr/local/lib/php/extensions/* \
-    && rm -Rf ioncube.tar.gz ioncube \
-    && echo "zend_extension=ioncube_loader_lin_7.0.so" > /usr/local/etc/php/conf.d/00_docker-php-ext-ioncube.ini
+    && ln -sf /proc/self/fd/1 /var/log/apache2/access.log \
+    && ln -sf /proc/self/fd/1 /var/log/apache2/error.log \
+    && curl -sSL -o /tmp/ioncube.zip http://downloads.ioncube.com/loader_downloads/ioncube_loaders_lin_x86-64.zip \
+    && unzip /tmp/ioncube.zip -d /usr/local/lib/php/extensions/* \
+    && rm -Rf /tmp/ioncube.zip \
+    && echo "zend_extension=ioncube/ioncube_loader_lin_7.2.so" > /usr/local/etc/php/conf.d/00_docker-php-ext-ioncube.ini
 
 ADD supervisord.conf /etc/supervisor/supervisord.conf
 ADD logformat.conf /etc/apache2/conf-enabled/logformat.conf
+ADD remoteip.conf /etc/apache2/conf-enabled/remoteip.conf
+ADD entrypoint.sh /entrypoint.sh
 
-RUN echo '*/5 * * * * www-data /usr/local/bin/php /var/www/html/index.php cron' > /etc/cron.d/blesta \
-    && echo '' > /etc/cron.d/geoip
+RUN mkdir /var/www/app \
+    && curl -o blesta.zip -sSL https://account.blesta.com/client/plugin/download_manager/client_main/download/135/blesta-${VERSION}.zip \
+    && unzip blesta.zip -d /var/www/app \
+    && rm blesta.zip \
+    && chown -R www-data:www-data /var/www/app/blesta/cache /var/www/app/uploads /var/www/app/blesta/config \
+    && mv /var/www/app /var/www/docker-backup-app \
+    && sed -ri -e 's!/var/www/html!/var/www/app/blesta!g' /etc/apache2/sites-available/*.conf \
+    && sed -ri -e 's!/var/www/html!/var/www/app/blesta!g' /etc/apache2/apache2.conf /etc/apache2/conf-available/*.conf \
+    && echo '*/5 * * * * www-data /usr/local/bin/php /var/www/app/blesta/index.php cron' > /etc/cron.d/blesta \
+    && echo '0 9 * * 3 www-data [ `date +\%d` -le 7 ] && /usr/bin/curl -sSL https://geolite.maxmind.com/download/geoip/database/GeoLite2-City.tar.gz | gunzip > /var/www/app/uploads/system/GeoLite2-City.mmdb' >> /etc/cron.d/blesta
 
+VOLUME /var/www/app
+WORKDIR /var/www/app
+EXPOSE 80
+
+HEALTHCHECK CMD curl --silent --fail localhost:80 || exit 1
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["/usr/bin/supervisord"]
