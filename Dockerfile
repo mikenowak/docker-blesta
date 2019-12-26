@@ -26,7 +26,8 @@ ENV BUILD_DEPS \
         python3-pycurl \
         unzip \
         wget \
-        supervisor
+        supervisor \
+        git
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends $BUILD_DEPS \
